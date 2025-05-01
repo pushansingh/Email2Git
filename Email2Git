@@ -68,6 +68,7 @@ def wait_or_interrupt(seconds):
 def check_github_user(email, api_key):
     try:
         headers = {'Authorization': f'token {api_key}'}
+        time.sleep(2)
         response = requests.get(
             f'https://api.github.com/search/users?q={email}+in:email',
             headers=headers
