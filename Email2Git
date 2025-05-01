@@ -50,7 +50,7 @@ def wait_or_interrupt(seconds):
     def wait_for_enter():
         input(f"{YELLOW}Pausing... Press ENTER to resume immediately...{RESET}\n")
         interrupt_event.set()
-    
+
     # Start a thread to listen for the ENTER key
     t = threading.Thread(target=wait_for_enter)
     t.start()
@@ -68,7 +68,10 @@ def wait_or_interrupt(seconds):
 def check_github_user(email, api_key):
     try:
         headers = {'Authorization': f'token {api_key}'}
-        response = requests.get(f'https://api.github.com/search/users?q={email}+in:email', headers=headers)
+        response = requests.get(
+            f'https://api.github.com/search/users?q={email}+in:email',
+            headers=headers
+        )
 
         if response.status_code == 403:
             logger.error(f"{RED}403 Forbidden for {email} (rate limit reached). Pausing...{RESET}")
@@ -106,12 +109,12 @@ def read_emails(file_path):
         logger.error(f"{RED}Emails file not found: {e}{RESET}")
         return []
 
-def write_txt_file(usernames):
+def write_txt_file(usernames, output_file):
     try:
-        with open("usernames.txt", "w") as file:
+        with open(output_file, "w") as file:
             for username in usernames:
                 file.write(username + "\n")
-        logger.info(f"{GREEN}Successfully wrote GitHub aliases to usernames.txt{RESET}")
+        logger.info(f"{GREEN}Successfully wrote GitHub aliases to {output_file}{RESET}")
     except IOError as e:
         logger.error(f"{RED}Error writing to file: {e}{RESET}")
 
@@ -126,6 +129,27 @@ def generate_html_gui(email_results):
                     color: #33ff33; 
                     font-family: "Courier New", Courier, monospace; 
                     padding: 20px; 
+                }
+                h1 {
+                    color: #ff3333;
+                    text-align: center;
+                }
+                #filterButtons {
+                    text-align: center;
+                    margin-bottom: 20px;
+                }
+                button {
+                    background-color: #1e1e1e;
+                    color: #33ff33;
+                    border: 1px solid #33ff33;
+                    padding: 10px 20px;
+                    margin: 5px;
+                    cursor: pointer;
+                    font-family: "Courier New", monospace;
+                }
+                button:hover {
+                    background-color: #33ff33;
+                    color: #121212;
                 }
                 table {
                     width: 100%;
@@ -147,14 +171,15 @@ def generate_html_gui(email_results):
                 .invalid {
                     background-color: #330000;
                 }
-                h1 {
-                    color: #ff3333;
-                    text-align: center;
-                }
             </style>
         </head>
         <body>
             <h1>Email2Git Recon Results</h1>
+            <div id="filterButtons">
+                <button onclick="filterRows('all')">Show All</button>
+                <button onclick="filterRows('valid')">Show With GitHub Accounts</button>
+                <button onclick="filterRows('invalid')">Show Without GitHub Accounts</button>
+            </div>
             <table id="resultsTable">
                 <thead>
                     <tr>
@@ -186,7 +211,7 @@ def generate_html_gui(email_results):
                     dir = "asc"; 
                     while (switching) {
                         switching = false;
-                        rows = table.rows;
+                        rows = table.getElementsByTagName("tr");
                         for (i = 1; i < (rows.length - 1); i++) {
                             shouldSwitch = false;
                             x = rows[i].getElementsByTagName("TD")[n];
@@ -215,6 +240,22 @@ def generate_html_gui(email_results):
                         }
                     }
                 }
+
+                function filterRows(filter) {
+                    var table = document.getElementById("resultsTable");
+                    var rows = table.getElementsByTagName("tr");
+                    for (var i = 1; i < rows.length; i++) {
+                        if (filter === 'all') {
+                            rows[i].style.display = "";
+                        } else {
+                            if (rows[i].classList.contains(filter)) {
+                                rows[i].style.display = "";
+                            } else {
+                                rows[i].style.display = "none";
+                            }
+                        }
+                    }
+                }
             </script>
         </body>
     </html>
@@ -231,7 +272,8 @@ def generate_html_gui(email_results):
 def main():
     print_banner()
     api_key = get_github_api_key()
-    email_file = "emails.txt"
+    email_file = input(f"{GREEN}Enter the email file name (e.g., emails.txt): {RESET}")
+    output_file = input(f"{GREEN}Enter the output file name for GitHub usernames (e.g., usernames.txt): {RESET}")
     emails = read_emails(email_file)
 
     if not emails:
@@ -247,7 +289,7 @@ def main():
         if username:
             usernames.append(username)
 
-    write_txt_file(usernames)
+    write_txt_file(usernames, output_file)
     generate_html_gui(email_results)
 
 if __name__ == '__main__':
