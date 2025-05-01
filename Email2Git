@@ -1,0 +1,254 @@
+import requests
+import time
+import threading
+import logging
+import signal
+import sys
+from flask import Flask, render_template_string
+import colorama
+
+# Initialize Colorama for ANSI color support
+colorama.init(autoreset=True)
+
+# ANSI color codes for style
+RED = "\033[91m"
+GREEN = "\033[92m"
+CYAN = "\033[96m"
+YELLOW = "\033[93m"
+RESET = "\033[0m"
+
+# Setup logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger()
+
+# Event to interrupt sleep if ENTER is pressed
+interrupt_event = threading.Event()
+
+def signal_handler(sig, frame):
+    logger.info(f"{CYAN}Ctrl+C pressed. Shutting down gracefully...{RESET}")
+    sys.exit(0)
+
+signal.signal(signal.SIGINT, signal_handler)
+
+def print_banner():
+    banner = f"""{CYAN}
+                   _ |\\_
+                   \\` ..\\
+              __,.-" =__Y=
+            ."        )
+      _    /   ,    \\/\\_
+     ((____|    )_-\\ \\_-`
+  `-----'`-----` `--`
+{YELLOW}Email2Git - Convert Emails to GitHub Profiles{RESET}
+"""
+    print(banner)
+
+def get_github_api_key():
+    return input(f"{GREEN}Enter your digital key (GitHub API Token): {RESET}")
+
+def wait_or_interrupt(seconds):
+    def wait_for_enter():
+        input(f"{YELLOW}Pausing... Press ENTER to resume immediately...{RESET}\n")
+        interrupt_event.set()
+    
+    # Start a thread to listen for the ENTER key
+    t = threading.Thread(target=wait_for_enter)
+    t.start()
+
+    logger.info(f"{CYAN}Waiting {seconds} seconds or press ENTER to continue early...{RESET}")
+    interrupted = interrupt_event.wait(timeout=seconds)
+
+    if interrupted:
+        logger.info(f"{GREEN}Resuming operation early...{RESET}")
+    else:
+        logger.info(f"{GREEN}Resuming operation after pause...{RESET}")
+
+    interrupt_event.clear()
+
+def check_github_user(email, api_key):
+    try:
+        headers = {'Authorization': f'token {api_key}'}
+        response = requests.get(f'https://api.github.com/search/users?q={email}+in:email', headers=headers)
+
+        if response.status_code == 403:
+            logger.error(f"{RED}403 Forbidden for {email} (rate limit reached). Pausing...{RESET}")
+            wait_or_interrupt(60)
+            return check_github_user(email, api_key)
+        elif response.status_code == 400:
+            logger.error(f"{RED}400 Bad Request for {email}. Pausing...{RESET}")
+            wait_or_interrupt(60)
+            return check_github_user(email, api_key)
+        elif response.status_code == 200:
+            data = response.json()
+            if data['total_count'] > 0:
+                logger.info(f"{GREEN}Email {email} matched to GitHub alias: {data['items'][0]['login']}{RESET}")
+                return email, data['items'][0]['login']
+            else:
+                logger.info(f"{YELLOW}No GitHub account associated with {email}.{RESET}")
+                return email, None
+        else:
+            logger.error(f"{RED}Unexpected error {response.status_code} for {email}. Retrying...{RESET}")
+            wait_or_interrupt(60)
+            return check_github_user(email, api_key)
+    except requests.exceptions.RequestException as e:
+        logger.error(f"{RED}Network error for {email}: {e}{RESET}")
+        wait_or_interrupt(60)
+        return check_github_user(email, api_key)
+
+def read_emails(file_path):
+    try:
+        with open(file_path, 'r') as file:
+            emails = [line.strip() for line in file.readlines() if line.strip()]
+            if not emails:
+                logger.warning(f"{YELLOW}No emails found in {file_path}. Check your input file.{RESET}")
+            return emails
+    except FileNotFoundError as e:
+        logger.error(f"{RED}Emails file not found: {e}{RESET}")
+        return []
+
+def write_txt_file(usernames):
+    try:
+        with open("usernames.txt", "w") as file:
+            for username in usernames:
+                file.write(username + "\n")
+        logger.info(f"{GREEN}Successfully wrote GitHub aliases to usernames.txt{RESET}")
+    except IOError as e:
+        logger.error(f"{RED}Error writing to file: {e}{RESET}")
+
+def generate_html_gui(email_results):
+    html_template = '''
+    <html>
+        <head>
+            <title>Email2Git - Email to GitHub Account Recon</title>
+            <style>
+                body { 
+                    background-color: #121212; 
+                    color: #33ff33; 
+                    font-family: "Courier New", Courier, monospace; 
+                    padding: 20px; 
+                }
+                table {
+                    width: 100%;
+                    border-collapse: collapse;
+                    margin-top: 20px;
+                }
+                th, td {
+                    padding: 12px 15px;
+                    border: 1px solid #33ff33;
+                    text-align: left;
+                }
+                th {
+                    cursor: pointer;
+                    background-color: #1e1e1e;
+                }
+                .valid {
+                    background-color: #1e1e1e;
+                }
+                .invalid {
+                    background-color: #330000;
+                }
+                h1 {
+                    color: #ff3333;
+                    text-align: center;
+                }
+            </style>
+        </head>
+        <body>
+            <h1>Email2Git Recon Results</h1>
+            <table id="resultsTable">
+                <thead>
+                    <tr>
+                        <th onclick="sortTable(0)">Email</th>
+                        <th onclick="sortTable(1)">GitHub Alias</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for email, result in email_results.items() %}
+                        <tr class="{% if result %}valid{% else %}invalid{% endif %}">
+                            <td>{{ email }}</td>
+                            <td>
+                                {% if result %}
+                                    {{ result }}
+                                {% else %}
+                                    None
+                                {% endif %}
+                            </td>
+                        </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+
+            <script>
+                function sortTable(n) {
+                    var table, rows, switching, i, x, y, shouldSwitch, dir, switchcount = 0;
+                    table = document.getElementById("resultsTable");
+                    switching = true;
+                    dir = "asc"; 
+                    while (switching) {
+                        switching = false;
+                        rows = table.rows;
+                        for (i = 1; i < (rows.length - 1); i++) {
+                            shouldSwitch = false;
+                            x = rows[i].getElementsByTagName("TD")[n];
+                            y = rows[i + 1].getElementsByTagName("TD")[n];
+                            if (dir === "asc") {
+                                if (x.innerHTML.toLowerCase() > y.innerHTML.toLowerCase()) {
+                                    shouldSwitch = true;
+                                    break;
+                                }
+                            } else if (dir === "desc") {
+                                if (x.innerHTML.toLowerCase() < y.innerHTML.toLowerCase()) {
+                                    shouldSwitch = true;
+                                    break;
+                                }
+                            }
+                        }
+                        if (shouldSwitch) {
+                            rows[i].parentNode.insertBefore(rows[i + 1], rows[i]);
+                            switching = true;
+                            switchcount++;
+                        } else {
+                            if (switchcount === 0 && dir === "asc") {
+                                dir = "desc";
+                                switching = true;
+                            }
+                        }
+                    }
+                }
+            </script>
+        </body>
+    </html>
+    '''
+    app = Flask(__name__)
+
+    @app.route('/')
+    def index():
+        return render_template_string(html_template, email_results=email_results)
+
+    logger.info(f"{CYAN}Launching Email2Git interface on http://127.0.0.1:5000 ...{RESET}")
+    app.run(debug=True, use_reloader=False)
+
+def main():
+    print_banner()
+    api_key = get_github_api_key()
+    email_file = "emails.txt"
+    emails = read_emails(email_file)
+
+    if not emails:
+        logger.error(f"{RED}No input emails detected. Aborting operation.{RESET}")
+        return
+
+    email_results = {}
+    usernames = []
+
+    for email in emails:
+        email, username = check_github_user(email, api_key)
+        email_results[email] = username
+        if username:
+            usernames.append(username)
+
+    write_txt_file(usernames)
+    generate_html_gui(email_results)
+
+if __name__ == '__main__':
+    main()
